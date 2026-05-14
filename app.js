@@ -168,6 +168,9 @@ const Training = {
     el('home-goal-text').textContent = `${count} von ${goal} Trainings diese Woche`;
     el('home-goal-fill').style.width = `${Math.min(count / goal, 1) * 100}%`;
 
+    // Wochenziele dots
+    this._renderWeekDots();
+
     // Last training label
     const sessions = DB.getSessions().sort((a, b) => b.date.localeCompare(a.date));
     if (sessions.length > 0) {
@@ -197,6 +200,30 @@ const Training = {
     mon.setDate(now.getDate() - dow);
     const monStr = mon.toISOString().slice(0, 10);
     return DB.getSessions().filter(s => s.date >= monStr).length;
+  },
+
+  _renderWeekDots() {
+    const goal = parseInt(localStorage.getItem('weeklyGoal') || '3');
+    const sessions = DB.getSessions();
+    const now = new Date();
+    const dow = now.getDay() === 0 ? 6 : now.getDay() - 1;
+
+    // Build 10 dots: index 0 = 9 weeks ago ... index 9 = current week
+    const dots = [];
+    for (let w = 9; w >= 0; w--) {
+      const mon = new Date(now);
+      mon.setDate(now.getDate() - dow - w * 7);
+      const sun = new Date(mon);
+      sun.setDate(mon.getDate() + 6);
+      const monStr = mon.toISOString().slice(0, 10);
+      const sunStr = sun.toISOString().slice(0, 10);
+      const count = sessions.filter(s => s.date >= monStr && s.date <= sunStr).length;
+      dots.push(count >= goal);
+    }
+
+    el('home-weeks-dots').innerHTML = dots
+      .map(reached => `<div class="home-week-dot${reached ? ' reached' : ''}"></div>`)
+      .join('');
   },
 
   start() {
