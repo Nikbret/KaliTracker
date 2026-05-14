@@ -12,8 +12,76 @@
   <link rel="apple-touch-icon" href="icon.svg">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script>if(!localStorage.getItem('onboardingDone'))document.documentElement.classList.add('onboarding-active');</script>
 </head>
 <body>
+
+  <!-- ===== ONBOARDING ===== -->
+  <div id="onboarding">
+    <div id="onb-screen-1" class="onb-screen">
+      <div class="onb-inner">
+        <div class="onb-logo">
+          <svg width="48" height="48" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+            <rect width="512" height="512" rx="100" fill="#111"/>
+            <rect x="110" y="236" width="292" height="40" rx="10" fill="#00E676"/>
+            <rect x="88" y="208" width="24" height="96" rx="6" fill="#00C853"/>
+            <rect x="46" y="192" width="44" height="128" rx="9" fill="#00E676"/>
+            <rect x="400" y="208" width="24" height="96" rx="6" fill="#00C853"/>
+            <rect x="422" y="192" width="44" height="128" rx="9" fill="#00E676"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="onb-title">Wie heißt du?</h1>
+          <p class="onb-sub">Dein persönlicher Trainingsbegleiter</p>
+        </div>
+        <input type="text" id="onb-name" class="onb-text-input" placeholder="Dein Name" autocomplete="given-name" autocorrect="off" autocapitalize="words">
+        <button id="btn-onb-next" class="btn-onb-primary" disabled>Weiter →</button>
+      </div>
+    </div>
+
+    <div id="onb-screen-2" class="onb-screen hidden">
+      <div class="onb-inner">
+        <div>
+          <h1 class="onb-title" id="onb-title-2">Fast geschafft!</h1>
+          <p class="onb-sub">Ein paar Details für deine PRs</p>
+        </div>
+
+        <div class="onb-section">
+          <div class="onb-section-label">Geschlecht</div>
+          <div class="onb-gender-row">
+            <button class="onb-gender-btn selected" data-val="männlich">Männlich</button>
+            <button class="onb-gender-btn" data-val="weiblich">Weiblich</button>
+          </div>
+        </div>
+
+        <div class="onb-section">
+          <div class="onb-section-label">Alter</div>
+          <div class="onb-input-row">
+            <input type="number" id="onb-age" class="onb-num-input" placeholder="25" inputmode="numeric" min="1" max="120">
+            <span class="onb-unit">Jahre</span>
+          </div>
+        </div>
+
+        <div class="onb-section">
+          <div class="onb-section-label">Größe</div>
+          <div class="onb-input-row">
+            <input type="number" id="onb-height" class="onb-num-input" placeholder="180" inputmode="numeric" min="100" max="250">
+            <span class="onb-unit">cm</span>
+          </div>
+        </div>
+
+        <div class="onb-section">
+          <div class="onb-section-label">Gewicht</div>
+          <div class="onb-input-row">
+            <input type="number" id="onb-weight" class="onb-num-input" placeholder="75" inputmode="decimal" min="20" max="300" step="0.1">
+            <span class="onb-unit">kg</span>
+          </div>
+        </div>
+
+        <button id="btn-onb-finish" class="btn-onb-primary">Loslegen 💪</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ===== TAB PANELS ===== -->
   <main id="app">
@@ -21,6 +89,12 @@
     <!-- TRAINING -->
     <section id="tab-training" class="tab-panel active">
       <div id="training-idle">
+        <!-- Greeting -->
+        <div class="home-greeting">
+          <div class="home-greeting-title" id="home-greeting-title"></div>
+          <div class="home-greeting-sub" id="home-greeting-sub"></div>
+        </div>
+
         <!-- Circle start button -->
         <div class="home-circle-wrap">
           <button id="btn-start-training" class="btn-circle-start">
@@ -212,6 +286,11 @@
     <section id="tab-settings" class="tab-panel">
       <div class="page-header">
         <h1>Einstellungen</h1>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-group-title">Profil</div>
+        <div class="settings-card" id="profil-card"></div>
       </div>
 
       <div class="settings-group">
