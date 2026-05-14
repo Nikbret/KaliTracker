@@ -38,10 +38,15 @@ const DB = {
   updateCardioEntry(id,e){ const a = this.getCardioEntries(); const i = a.findIndex(x => x.id === id); if (i > -1) { a[i] = e; this.saveCardioEntries(a); } },
   deleteCardioEntry(id)  { this.saveCardioEntries(this.getCardioEntries().filter(e => e.id !== id)); },
 
-  getPRs()       { return JSON.parse(localStorage.getItem('personalRecords') || '{}'); },
-  savePRs(p)     { localStorage.setItem('personalRecords', JSON.stringify(p)); },
+  getPRs()        { return JSON.parse(localStorage.getItem('personalRecords') || '{}'); },
+  savePRs(p)      { localStorage.setItem('personalRecords', JSON.stringify(p)); },
+  getProfile()    { return JSON.parse(localStorage.getItem('userProfile') || 'null'); },
+  saveProfile(p)  { localStorage.setItem('userProfile', JSON.stringify(p)); },
+  getBodyWeight() { const p = this.getProfile(); return (p && p.weight) ? parseFloat(p.weight) : 0; },
+
   checkAndUpdatePR(name, reps, weight) {
-    const score    = e1rm(reps, weight);
+    const bw       = this.getBodyWeight();
+    const score    = e1rm(reps, weight, bw);
     const prs      = this.getPRs();
     const cur      = prs[name];
     const curScore = (cur && typeof cur === 'object') ? cur.score : (cur || 0);
@@ -51,6 +56,22 @@ const DB = {
       return true;
     }
     return false;
+  },
+
+  recalcAllPRs() {
+    const bw   = this.getBodyWeight();
+    const prs  = {};
+    this.getSessions().forEach(s => {
+      s.exercises.forEach(ex => {
+        ex.sets.forEach(set => {
+          const score    = e1rm(set.reps, set.weight, bw);
+          const cur      = prs[ex.name];
+          const curScore = (cur && typeof cur === 'object') ? cur.score : (cur || 0);
+          if (score > curScore) prs[ex.name] = { score, reps: set.reps, weight: set.weight };
+        });
+      });
+    });
+    this.savePRs(prs);
   },
 };
 
@@ -69,9 +90,10 @@ function formatDateShort(iso) {
   return `${d}.${m < 10 ? '0'+m : m}`;
 }
 
-function e1rm(reps, weight) {
-  if (weight > 0) return Math.round(weight * (1 + reps / 30) * 10) / 10;
-  return reps; // bodyweight: use reps as metric
+function e1rm(reps, weight, bodyWeight = 0) {
+  const total = (bodyWeight || 0) + weight;
+  if (total > 0) return Math.round(total * (1 + reps / 30) * 10) / 10;
+  return reps; // pure bodyweight, no profile: use reps as metric
 }
 
 function bestSet(sets) {
@@ -144,13 +166,26 @@ const Training = {
   },
 
   renderIdle() {
+    // Greeting
+    const hour = new Date().getHours();
+    const greetWord = hour >= 4 && hour < 11 ? 'Guten Morgen'
+                    : hour >= 11 && hour < 17 ? 'Guten Tag'
+                    : 'Guten Abend';
+    const profile = DB.getProfile();
+    const namePart = profile && profile.name ? `, ${profile.name}` : '';
+    const trainedToday = DB.getSessions().some(s => s.date === today());
+    el('home-greeting-title').textContent = `${greetWord}${namePart}!`;
+    el('home-greeting-sub').textContent   = trainedToday
+      ? 'Du hast heute bereits trainiert!'
+      : 'Beginne mit deinem heutigen Training!';
+
     // PR showcase (3 hardcoded key exercises)
     const PR_EXERCISES = ['Liegestütze', 'Klimmzüge', 'Dips'];
     const prs = DB.getPRs();
     const colsHTML = PR_EXERCISES.map((name, i) => {
       const pr  = prs[name];
       const val = (pr && typeof pr === 'object')
-        ? `${pr.reps} × ${weightLabel(pr.weight)}`
+        ? (pr.weight > 0 ? `${pr.reps} Wdh + ${pr.weight} kg` : `${pr.reps} Wdh`)
         : '—';
       return `${i > 0 ? '<div class="home-pr-divider"></div>' : ''}
         <div class="home-pr-col">
@@ -294,7 +329,52 @@ const Training = {
 
   deleteSet(idx) {
     State.currentExercise.sets.splice(idx, 1);
+    this._recalcPRAfterDelete(State.currentExercise.name);
     this.renderCurrent();
+  },
+
+  _recalcPRAfterDelete(name) {
+    const bw  = DB.getBodyWeight();
+    const prs = DB.getPRs();
+
+    // Collect all sets for this exercise from history + current session's completed exercises
+    const historySets = [];
+    DB.getSessions().forEach(s =>
+      s.exercises.filter(ex => ex.name === name)
+        .forEach(ex => ex.sets.forEach(set => historySets.push(set)))
+    );
+    if (State.session) {
+      State.session.exercises.filter(ex => ex.name === name)
+        .forEach(ex => ex.sets.forEach(set => historySets.push(set)));
+    }
+
+    // Best score from history (not including current exercise being edited)
+    let histBest = 0, bestSet = null;
+    historySets.forEach(set => {
+      const score = e1rm(set.reps, set.weight, bw);
+      if (score > histBest) { histBest = score; bestSet = { ...set }; }
+    });
+
+    // Re-flag isPR on remaining current exercise sets
+    let runningBest = histBest;
+    State.currentExercise.sets.forEach(set => {
+      const score = e1rm(set.reps, set.weight, bw);
+      if (score > runningBest) {
+        set.isPR    = true;
+        runningBest = score;
+        bestSet = { ...set };
+      } else {
+        set.isPR = false;
+      }
+    });
+
+    // Save updated PR
+    if (bestSet && runningBest > 0) {
+      prs[name] = { score: runningBest, reps: bestSet.reps, weight: bestSet.weight };
+    } else {
+      delete prs[name];
+    }
+    DB.savePRs(prs);
   },
 
   finishExercise() {
@@ -459,7 +539,9 @@ const History = {
       e.stopPropagation();
       showConfirm(`Training vom ${formatDate(session.date)} löschen?`, () => {
         DB.deleteSession(session.id);
+        DB.recalcAllPRs();
         this.render();
+        Training.renderIdle();
       });
     });
 
@@ -592,12 +674,13 @@ const Progress = {
     const labels = [];
     const data   = [];
 
+    const bw = DB.getBodyWeight();
     sessions.forEach(s => {
       const ex = s.exercises.find(e => e.name === name);
       if (!ex || ex.sets.length === 0) return;
       const best = bestSet(ex.sets);
       labels.push(formatDateShort(s.date));
-      data.push(e1rm(best.reps, best.weight));
+      data.push(e1rm(best.reps, best.weight, bw));
     });
 
     const allBodyweight = sessions.every(s => {
@@ -971,6 +1054,196 @@ const Cardio = {
   },
 };
 
+// ===== ONBOARDING =====
+const Onboarding = {
+  _gender: 'männlich',
+
+  isComplete() { return !!localStorage.getItem('onboardingDone'); },
+
+  show() {
+    document.documentElement.classList.add('onboarding-active');
+    this._initEvents();
+    setTimeout(() => el('onb-name').focus(), 400);
+  },
+
+  _done() {
+    const name   = el('onb-name').value.trim();
+    const age    = parseInt(el('onb-age').value)     || null;
+    const height = parseInt(el('onb-height').value)  || null;
+    const weight = parseFloat(el('onb-weight').value)|| null;
+    DB.saveProfile({ name, gender: this._gender, age, height, weight });
+    localStorage.setItem('onboardingDone', '1');
+    document.documentElement.classList.remove('onboarding-active');
+    // boot rest of app now
+    Training.renderIdle();
+    History.render();
+    Cardio.render();
+    Progress.render();
+    Profile.render();
+  },
+
+  _initEvents() {
+    el('onb-name').addEventListener('input', () => {
+      el('btn-onb-next').disabled = !el('onb-name').value.trim();
+    });
+
+    el('btn-onb-next').addEventListener('click', () => {
+      const name = el('onb-name').value.trim();
+      if (!name) return;
+      el('onb-title-2').textContent = `Fast geschafft, ${name}!`;
+      el('onb-screen-1').classList.add('hidden');
+      el('onb-screen-2').classList.remove('hidden');
+    });
+
+    el('onboarding').querySelectorAll('.onb-gender-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        el('onboarding').querySelectorAll('.onb-gender-btn')
+          .forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        this._gender = btn.dataset.val;
+      });
+    });
+
+    el('btn-onb-finish').addEventListener('click', () => this._done());
+  },
+};
+
+// ===== PROFILE MODULE =====
+const Profile = {
+  _editing: false,
+  _gender: 'männlich',
+
+  render() {
+    const card    = el('profil-card');
+    const profile = DB.getProfile() || {};
+    if (this._editing) {
+      this._renderEdit(card, profile);
+    } else {
+      this._renderView(card, profile);
+    }
+  },
+
+  _renderView(card, profile) {
+    const gLabel = profile.gender === 'weiblich' ? 'Weiblich' : (profile.gender ? 'Männlich' : null);
+    const details = [
+      gLabel,
+      profile.age    ? `${profile.age} Jahre`  : null,
+      profile.height ? `${profile.height} cm`  : null,
+      profile.weight ? `${profile.weight} kg`  : null,
+    ].filter(Boolean).join(' · ');
+
+    card.innerHTML = `
+      <div class="profil-view">
+        <button class="btn-profil-edit-corner" id="btn-profil-edit">Bearbeiten</button>
+        <div class="profil-name">${profile.name || '—'}</div>
+        <div class="profil-details">${details || '—'}</div>
+      </div>`;
+    el('btn-profil-edit').addEventListener('click', () => {
+      this._editing = true;
+      this._gender  = profile.gender || 'männlich';
+      this.render();
+    });
+  },
+
+  _renderEdit(card, profile) {
+    const mSel = this._gender === 'männlich' ? 'selected' : '';
+    const wSel = this._gender === 'weiblich' ? 'selected' : '';
+    card.innerHTML = `
+      <div class="profil-edit-wrap">
+        <div class="profil-edit-field">
+          <label class="settings-item-label">Name</label>
+          <input type="text" id="profil-name" class="input-field" value="${profile.name || ''}" autocorrect="off" autocapitalize="words">
+        </div>
+        <div class="profil-edit-field">
+          <label class="settings-item-label">Geschlecht</label>
+          <div class="profil-gender-row">
+            <button class="profil-gender-btn ${mSel}" data-val="männlich">Männlich</button>
+            <button class="profil-gender-btn ${wSel}" data-val="weiblich">Weiblich</button>
+          </div>
+        </div>
+        <div class="profil-edit-field">
+          <label class="settings-item-label">Alter</label>
+          <div class="profil-input-row">
+            <input type="number" id="profil-age" class="input-field profil-num" value="${profile.age || ''}" inputmode="numeric" min="1" max="120">
+            <span class="profil-unit">Jahre</span>
+          </div>
+        </div>
+        <div class="profil-edit-field">
+          <label class="settings-item-label">Größe</label>
+          <div class="profil-input-row">
+            <input type="number" id="profil-height" class="input-field profil-num" value="${profile.height || ''}" inputmode="numeric" min="100" max="250">
+            <span class="profil-unit">cm</span>
+          </div>
+        </div>
+        <div class="profil-edit-field">
+          <label class="settings-item-label">Gewicht</label>
+          <div class="profil-input-row">
+            <input type="number" id="profil-weight" class="input-field profil-num" value="${profile.weight || ''}" inputmode="decimal" min="20" max="300" step="0.1">
+            <span class="profil-unit">kg</span>
+          </div>
+        </div>
+        <div class="profil-bmi-wrap" id="profil-bmi-wrap"></div>
+        <div class="profil-edit-actions">
+          <button class="btn-outline" id="btn-profil-cancel">Abbrechen</button>
+          <button class="btn-primary"  id="btn-profil-save">Speichern</button>
+        </div>
+      </div>`;
+
+    card.querySelectorAll('.profil-gender-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        card.querySelectorAll('.profil-gender-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        this._gender = btn.dataset.val;
+      });
+    });
+
+    const updateBMI = () => {
+      const h = parseFloat(el('profil-height').value);
+      const w = parseFloat(el('profil-weight').value);
+      const wrap = el('profil-bmi-wrap');
+      if (h > 0 && w > 0) {
+        const bmi = w / Math.pow(h / 100, 2);
+        let cat, color;
+        if      (bmi < 18.5) { cat = 'Untergewicht'; color = '#60A5FA'; }
+        else if (bmi < 25)   { cat = 'Normalgewicht'; color = '#4ADE80'; }
+        else if (bmi < 30)   { cat = 'Übergewicht';   color = '#FB923C'; }
+        else                 { cat = 'Adipositas';     color = '#F87171'; }
+        wrap.innerHTML = `
+          <div class="profil-bmi">
+            <div class="profil-bmi-num" style="color:${color}">${bmi.toFixed(1)}</div>
+            <div class="profil-bmi-cat" style="color:${color}">${cat}</div>
+          </div>`;
+      } else {
+        wrap.innerHTML = '';
+      }
+    };
+
+    el('profil-height').addEventListener('input', updateBMI);
+    el('profil-weight').addEventListener('input', updateBMI);
+    updateBMI();
+
+    el('btn-profil-cancel').addEventListener('click', () => {
+      this._editing = false;
+      this.render();
+    });
+
+    el('btn-profil-save').addEventListener('click', () => {
+      const updated = {
+        name:   el('profil-name').value.trim() || null,
+        gender: this._gender,
+        age:    parseInt(el('profil-age').value)    || null,
+        height: parseInt(el('profil-height').value) || null,
+        weight: parseFloat(el('profil-weight').value) || null,
+      };
+      DB.saveProfile(updated);
+      DB.recalcAllPRs();
+      this._editing = false;
+      this.render();
+      Training.renderIdle();
+    });
+  },
+};
+
 // ===== BACKUP MODULE =====
 const Backup = {
   _statusTimer: null,
@@ -1031,7 +1304,12 @@ const Backup = {
         DB.saveSessions(data.trainingSessions);
         DB.saveCardioEntries(data.cardioEntries);
         DB.saveCustomExercises(data.customExercises);
-        window.location.reload();
+        DB.recalcAllPRs();
+        Training.renderIdle();
+        History.render();
+        Cardio.render();
+        Progress.render();
+        this._showStatus('Import erfolgreich.', 'success');
       }, 'Importieren');
     };
     reader.onerror = () => this._showStatus('Datei konnte nicht gelesen werden.', 'error');
@@ -1137,8 +1415,14 @@ document.addEventListener('DOMContentLoaded', () => {
   PacePicker.init();
   initEvents();
   initSW();
-  Training.render();
-  History.render();
-  Cardio.render();
-  Progress.render();
+
+  if (Onboarding.isComplete()) {
+    Training.render();
+    History.render();
+    Cardio.render();
+    Progress.render();
+    Profile.render();
+  } else {
+    Onboarding.show();
+  }
 });
