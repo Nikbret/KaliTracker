@@ -95,11 +95,10 @@
           <div class="home-greeting-sub" id="home-greeting-sub"></div>
         </div>
 
-        <!-- Circle start button -->
-        <div class="home-circle-wrap">
-          <button id="btn-start-training" class="btn-circle-start">
-            <span class="btn-circle-inner">Training<br>starten</span>
-          </button>
+        <!-- Action buttons -->
+        <div class="home-actions-wrap">
+          <button id="btn-start-training" class="btn-home-training">Training starten</button>
+          <button id="btn-show-cardio-modal" class="btn-home-cardio">Cardio Session hinzufügen</button>
         </div>
 
         <!-- PR showcase card -->
@@ -171,6 +170,13 @@
       <div class="page-header">
         <h1>Historie</h1>
       </div>
+      <div class="history-filter">
+        <button class="history-filter-btn active" data-filter="all">Alle</button>
+        <button class="history-filter-btn" data-filter="training">Calisthenics</button>
+        <button class="history-filter-btn" data-filter="cardio">Cardio</button>
+      </div>
+      <div id="history-cardio-prs" class="hidden"></div>
+      <div id="history-stats" class="history-stats hidden"></div>
       <div id="history-list"></div>
     </section>
 
@@ -179,108 +185,68 @@
       <div class="page-header">
         <h1>Fortschritt</h1>
       </div>
+
+      <!-- Exercise selector -->
       <div class="progress-select-wrap">
         <label class="form-label">Übung auswählen</label>
         <select id="progress-select" class="input-field"></select>
       </div>
+
+      <!-- Summary stat cards (shown when exercise selected) -->
+      <div id="progress-summary" class="progress-summary hidden"></div>
+
+      <!-- Metric switcher -->
+      <div id="progress-metric-wrap" class="progress-controls hidden">
+        <div class="progress-switcher">
+          <button class="progress-switch-btn active" data-metric="e1rm">Gesch. 1RM</button>
+          <button class="progress-switch-btn" data-metric="reps">Max. Wdh.</button>
+          <button class="progress-switch-btn" data-metric="volume">Volumen</button>
+        </div>
+      </div>
+
+      <!-- Time range filter -->
+      <div id="progress-range-wrap" class="progress-controls hidden">
+        <div class="progress-range-select-wrap">
+          <select id="progress-range-select" class="progress-range-select">
+            <option value="7d">Letzte 7 Tage</option>
+            <option value="14d">Letzte 14 Tage</option>
+            <option value="30d" selected>Letzte 30 Tage</option>
+            <option value="3m">Letzte 3 Monate</option>
+            <option value="6m">Letzte 6 Monate</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Main chart -->
       <div id="progress-chart-wrap" class="chart-wrap hidden">
         <canvas id="progress-chart"></canvas>
       </div>
       <p id="progress-empty" class="empty-state">Wähle eine Übung, um den Fortschritt zu sehen.</p>
       <p id="progress-no-data" class="empty-state hidden">Noch keine Daten für diese Übung.</p>
 
+      <!-- Weekly volume for selected exercise -->
       <div id="volume-chart-wrap" class="chart-wrap volume-chart-wrap hidden">
-        <div class="volume-chart-title">Wochenvolumen</div>
+        <div class="volume-chart-title" id="volume-chart-title">Wochenvolumen</div>
         <canvas id="volume-chart"></canvas>
       </div>
+
+      <!-- Cardio chart (always shown) -->
+      <div class="chart-wrap cardio-chart-section">
+        <div class="cardio-chart-header">
+          <div class="volume-chart-title">Cardio Entwicklung</div>
+          <select id="cardio-chart-select" class="progress-mini-select">
+            <option value="Joggen">Joggen</option>
+            <option value="Spazieren">Spazieren</option>
+            <option value="Fahrrad">Fahrrad</option>
+          </select>
+        </div>
+        <div id="cardio-chart-inner" class="hidden">
+          <canvas id="cardio-chart"></canvas>
+        </div>
+        <p id="cardio-chart-empty" class="empty-state">Noch keine Cardio-Daten.</p>
+      </div>
     </section>
 
-    <!-- CARDIO -->
-    <section id="tab-cardio" class="tab-panel">
-      <div class="page-header">
-        <div class="header-row">
-          <h1>Cardio</h1>
-          <button id="btn-show-cardio-form" class="btn-icon-round" title="Neue Einheit">+</button>
-        </div>
-      </div>
-
-      <div id="cardio-form-wrap" class="hidden">
-        <div class="card">
-          <h3 id="cardio-form-heading" class="section-title">Neue Einheit</h3>
-          <div class="form-group">
-            <label class="form-label">Aktivität</label>
-            <select id="cardio-activity" class="input-field">
-              <option value="Joggen">Joggen</option>
-              <option value="Spazieren">Spazieren</option>
-              <option value="Fahrrad">Fahrrad</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Datum</label>
-            <input type="date" id="cardio-date" class="input-field">
-          </div>
-          <!-- Duration scroll picker -->
-          <div class="picker-field-group">
-            <div class="picker-label">Dauer</div>
-            <div class="time-picker-wrap">
-              <div class="picker-col" id="picker-hours"></div>
-              <div class="picker-sep-label">h</div>
-              <div class="picker-col" id="picker-minutes"></div>
-              <div class="picker-sep-label">min</div>
-              <div class="picker-highlight"></div>
-              <div class="picker-fade-top"></div>
-              <div class="picker-fade-bottom"></div>
-            </div>
-            <input type="hidden" id="cardio-duration">
-          </div>
-
-          <!-- Distance -->
-          <div class="field-group">
-            <input type="number" id="cardio-distance" class="field-input" placeholder=" " min="0" step="0.01" inputmode="decimal">
-            <label for="cardio-distance" class="field-label">Distanz (km)</label>
-          </div>
-
-          <!-- Pace MM:SS (Joggen / Spazieren) -->
-          <div id="pace-section">
-            <div class="pace-field-group">
-              <div class="picker-label">Tempo (min/km)</div>
-              <div class="pace-inputs">
-                <div class="pace-col">
-                  <input type="number" id="pace-min" class="pace-input" min="0" max="99" inputmode="numeric" placeholder="0">
-                  <span class="pace-unit">min</span>
-                </div>
-                <span class="pace-colon">:</span>
-                <div class="pace-col">
-                  <input type="number" id="pace-sec" class="pace-input" min="0" max="59" inputmode="numeric" placeholder="00">
-                  <span class="pace-unit">sek</span>
-                </div>
-              </div>
-              <input type="hidden" id="cardio-pace">
-            </div>
-          </div>
-
-          <!-- Speed (Fahrrad) -->
-          <div id="speed-section" class="hidden">
-            <div class="field-group">
-              <input type="number" id="cardio-speed" class="field-input" placeholder=" " min="0" step="0.1" inputmode="decimal">
-              <label for="cardio-speed" class="field-label">Ø Geschwindigkeit (km/h)</label>
-            </div>
-          </div>
-
-          <!-- Heart rate -->
-          <div class="field-group">
-            <input type="number" id="cardio-heartrate" class="field-input" placeholder=" " min="0" inputmode="numeric">
-            <label for="cardio-heartrate" class="field-label">Herzrate (bpm)</label>
-          </div>
-          <div class="form-actions" style="margin-top:12px">
-            <button id="btn-cardio-cancel" class="btn-outline">Abbrechen</button>
-            <button id="btn-cardio-save" class="btn-primary">Speichern</button>
-          </div>
-        </div>
-      </div>
-
-      <div id="cardio-list"></div>
-    </section>
 
     <!-- EINSTELLUNGEN -->
     <section id="tab-settings" class="tab-panel">
@@ -325,6 +291,18 @@
             </div>
             <input type="number" id="weekly-goal-input" class="settings-number-input"
                    min="1" max="14" inputmode="numeric">
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-item-label">Cardio beim Wochenziel</div>
+              <div class="settings-item-sub">Cardio Einträge werden als Training gezählt</div>
+            </div>
+            <label class="toggle-switch" aria-label="Cardio zählen">
+              <input type="checkbox" class="toggle-input" id="cardio-goal-toggle">
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </label>
           </div>
         </div>
       </div>
@@ -432,17 +410,91 @@
         <path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/>
       </svg>
     </button>
-    <button class="tab-btn" data-tab="cardio" role="tab" aria-label="Cardio">
-      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" width="28" height="28">
-        <path d="M13.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM9.8 8.9L7 23h2.1l1.8-8 2.1 2v6h2v-7.5l-2.1-2 .6-3C14.8 12 16.8 13 19 13v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1L6 8.3V13h2V9.6l1.8-.7"/>
-      </svg>
-    </button>
     <button class="tab-btn" data-tab="settings" role="tab" aria-label="Einstellungen">
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" width="28" height="28">
         <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.63-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
       </svg>
     </button>
   </nav>
+
+  <!-- ===== CARDIO FORM MODAL ===== -->
+  <div id="modal-cardio" class="modal" aria-hidden="true">
+    <div class="modal-backdrop" id="cardio-modal-backdrop"></div>
+    <div class="modal-sheet modal-sheet-full">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <h3 id="cardio-modal-heading">Neue Einheit</h3>
+        <button class="btn-close" id="btn-cardio-modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Aktivität</label>
+          <select id="cardio-activity" class="input-field">
+            <option value="Joggen">Joggen</option>
+            <option value="Spazieren">Spazieren</option>
+            <option value="Fahrrad">Fahrrad</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Datum</label>
+          <input type="date" id="cardio-date" class="input-field">
+        </div>
+        <!-- Duration scroll picker -->
+        <div class="picker-field-group">
+          <div class="picker-label">Dauer</div>
+          <div class="time-picker-wrap">
+            <div class="picker-col" id="picker-hours"></div>
+            <div class="picker-sep-label">h</div>
+            <div class="picker-col" id="picker-minutes"></div>
+            <div class="picker-sep-label">min</div>
+            <div class="picker-highlight"></div>
+            <div class="picker-fade-top"></div>
+            <div class="picker-fade-bottom"></div>
+          </div>
+          <input type="hidden" id="cardio-duration">
+        </div>
+        <!-- Distance -->
+        <div class="field-group">
+          <input type="number" id="cardio-distance" class="field-input" placeholder=" " min="0" step="0.01" inputmode="decimal">
+          <label for="cardio-distance" class="field-label">Distanz (km)</label>
+        </div>
+        <!-- Pace MM:SS (Joggen / Spazieren) -->
+        <div id="pace-section">
+          <div class="pace-field-group">
+            <div class="picker-label">Tempo (min/km)</div>
+            <div class="pace-inputs">
+              <div class="pace-col">
+                <input type="number" id="pace-min" class="pace-input" min="0" max="99" inputmode="numeric" placeholder="0">
+                <span class="pace-unit">min</span>
+              </div>
+              <span class="pace-colon">:</span>
+              <div class="pace-col">
+                <input type="number" id="pace-sec" class="pace-input" min="0" max="59" inputmode="numeric" placeholder="00">
+                <span class="pace-unit">sek</span>
+              </div>
+            </div>
+            <input type="hidden" id="cardio-pace">
+          </div>
+        </div>
+        <!-- Speed (Fahrrad) -->
+        <div id="speed-section" class="hidden">
+          <div class="field-group">
+            <input type="number" id="cardio-speed" class="field-input" placeholder=" " min="0" step="0.1" inputmode="decimal">
+            <label for="cardio-speed" class="field-label">Ø Geschwindigkeit (km/h)</label>
+          </div>
+        </div>
+        <!-- Heart rate -->
+        <div class="field-group">
+          <input type="number" id="cardio-heartrate" class="field-input" placeholder=" " min="0" inputmode="numeric">
+          <label for="cardio-heartrate" class="field-label">Herzrate (bpm)</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-cardio-cancel" class="btn-outline">Abbrechen</button>
+        <button id="btn-cardio-save" class="btn-primary">Speichern</button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

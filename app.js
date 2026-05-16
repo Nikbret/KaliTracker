@@ -1,6 +1,8 @@
 'use strict';
 
 // ===== CONSTANTS =====
+const CARDIO_ICONS = { 'Joggen': '🏃', 'Spazieren': '🚶', 'Fahrrad': '🚴' };
+
 const PREDEFINED_EXERCISES = [
   'Klimmzüge', 'Chin-ups', 'Dips', 'Liegestütze', 'Pike Push-ups',
   'Muscle-ups', 'Rudern', 'Beinheben', 'L-Sit', 'Pistol Squat'
@@ -73,11 +75,36 @@ const DB = {
     });
     this.savePRs(prs);
   },
+
+  getCardioPRs()   { return JSON.parse(localStorage.getItem('cardioPRs') || '{}'); },
+  saveCardioPRs(p) { localStorage.setItem('cardioPRs', JSON.stringify(p)); },
+
+  recalcCardioPRs() {
+    const prs = {};
+    this.getCardioEntries().forEach(e => {
+      const a = e.activity;
+      if (!prs[a]) prs[a] = { distance: null, duration: null, pace: null, speed: null };
+      const p = prs[a];
+      if (e.distance != null && (p.distance == null || e.distance > p.distance)) p.distance = e.distance;
+      if (e.duration != null && (p.duration == null || e.duration > p.duration)) p.duration = e.duration;
+      if (e.pace     != null && (p.pace     == null || e.pace     < p.pace))     p.pace     = e.pace;
+      if (e.speed    != null && (p.speed    == null || e.speed    > p.speed))    p.speed    = e.speed;
+    });
+    this.saveCardioPRs(prs);
+  },
 };
 
 // ===== UTILS =====
 function uid()   { return Date.now() + Math.random().toString(36).slice(2); }
-function today() { return new Date().toISOString().slice(0,10); }
+function today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+// Local-timezone YYYY-MM-DD for any Date object (avoids UTC-shift from toISOString)
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
 
 function formatDate(iso) {
   const [y,m,d] = iso.split('-').map(Number);
@@ -144,9 +171,9 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   el(`tab-${name}`).classList.add('active');
+  if (name === 'training') Training.render();   // recalcs goal count + dots on every visit
   if (name === 'history')  History.render();
   if (name === 'progress') Progress.render();
-  if (name === 'cardio')   Cardio.render();
 }
 
 // ===== TRAINING MODULE =====
@@ -229,30 +256,35 @@ const Training = {
   },
 
   _sessionsThisWeek() {
-    const now = new Date();
-    const dow = now.getDay() === 0 ? 6 : now.getDay() - 1;
-    const mon = new Date(now);
-    mon.setDate(now.getDate() - dow);
-    const monStr = mon.toISOString().slice(0, 10);
-    return DB.getSessions().filter(s => s.date >= monStr).length;
+    const now    = new Date();
+    const dow    = now.getDay() === 0 ? 6 : now.getDay() - 1; // 0=Mon … 6=Sun
+    const mon    = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
+    const monStr = localDateStr(mon);
+    let count    = DB.getSessions().filter(s => s.date >= monStr).length;
+    if (localStorage.getItem('countCardioInGoal') === '1') {
+      count += DB.getCardioEntries().filter(e => e.date >= monStr).length;
+    }
+    return count;
   },
 
   _renderWeekDots() {
-    const goal = parseInt(localStorage.getItem('weeklyGoal') || '3');
-    const sessions = DB.getSessions();
-    const now = new Date();
-    const dow = now.getDay() === 0 ? 6 : now.getDay() - 1;
+    const goal        = parseInt(localStorage.getItem('weeklyGoal') || '3');
+    const sessions    = DB.getSessions();
+    const countCardio = localStorage.getItem('countCardioInGoal') === '1';
+    const cardioArr   = countCardio ? DB.getCardioEntries() : [];
+    const now         = new Date();
+    const dow         = now.getDay() === 0 ? 6 : now.getDay() - 1;
 
-    // Build 10 dots: index 0 = 9 weeks ago ... index 9 = current week
     const dots = [];
     for (let w = 9; w >= 0; w--) {
-      const mon = new Date(now);
-      mon.setDate(now.getDate() - dow - w * 7);
-      const sun = new Date(mon);
-      sun.setDate(mon.getDate() + 6);
-      const monStr = mon.toISOString().slice(0, 10);
-      const sunStr = sun.toISOString().slice(0, 10);
-      const count = sessions.filter(s => s.date >= monStr && s.date <= sunStr).length;
+      // Build Monday and Sunday for this bucket using local calendar math
+      const monDate = now.getDate() - dow - w * 7;
+      const mon     = new Date(now.getFullYear(), now.getMonth(), monDate);
+      const sun     = new Date(now.getFullYear(), now.getMonth(), monDate + 6);
+      const monStr  = localDateStr(mon);
+      const sunStr  = localDateStr(sun);
+      const count   = sessions.filter(s => s.date >= monStr && s.date <= sunStr).length
+                    + cardioArr.filter(e => e.date >= monStr && e.date <= sunStr).length;
       dots.push(count >= goal);
     }
 
@@ -485,15 +517,114 @@ const ExercisePicker = {
 
 // ===== HISTORY MODULE =====
 const History = {
+  _filter: 'all', // 'all' | 'training' | 'cardio'
+
+  setFilter(f) {
+    this._filter = f;
+    document.querySelectorAll('.history-filter-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.filter === f);
+    });
+    this.render();
+  },
+
   render() {
-    const sessions = DB.getSessions().slice().sort((a,b) => b.date.localeCompare(a.date));
+    const filter = this._filter;
+    let items = [];
+
+    if (filter !== 'cardio') {
+      DB.getSessions().forEach(s => items.push({ ...s, _type: 'training' }));
+    }
+    if (filter !== 'training') {
+      DB.getCardioEntries().forEach(e => items.push({ ...e, _type: 'cardio' }));
+    }
+
+    items.sort((a, b) => b.date.localeCompare(a.date));
+
+    // Cardio-only panels (PR card + monthly stats)
+    const prWrap    = el('history-cardio-prs');
+    const statsWrap = el('history-stats');
+    if (filter === 'cardio') {
+      prWrap.classList.remove('hidden');
+      prWrap.innerHTML = this._buildCardioPRCard();
+      statsWrap.classList.remove('hidden');
+      statsWrap.innerHTML = this._buildMonthlyStats();
+    } else {
+      prWrap.classList.add('hidden');
+      statsWrap.classList.add('hidden');
+    }
+
     const wrap = el('history-list');
     wrap.innerHTML = '';
-    if (sessions.length === 0) {
-      wrap.innerHTML = '<p class="empty-state">Noch keine Trainings gespeichert.</p>';
+
+    if (items.length === 0) {
+      const msg = filter === 'cardio'
+        ? 'Noch keine Cardio-Einheiten gespeichert.'
+        : filter === 'training'
+          ? 'Noch keine Trainings gespeichert.'
+          : 'Noch keine Einträge gespeichert.';
+      wrap.innerHTML = `<p class="empty-state">${msg}</p>`;
       return;
     }
-    sessions.forEach(s => wrap.appendChild(this.buildCard(s)));
+
+    items.forEach(item => {
+      if (item._type === 'training') wrap.appendChild(this.buildCard(item));
+      else                           wrap.appendChild(this._buildCardioCard(item));
+    });
+  },
+
+  _buildCardioPRCard() {
+    const prs        = DB.getCardioPRs();
+    const activities = ['Joggen', 'Spazieren', 'Fahrrad'].filter(a => prs[a]);
+    if (activities.length === 0) return '';
+
+    const rows = activities.map(act => {
+      const icon  = CARDIO_ICONS[act] || '🏃';
+      const p     = prs[act];
+      const isFahrrad = act === 'Fahrrad';
+      const stats = [];
+      if (p.distance != null) stats.push({ label: 'Distanz',       val: `${p.distance} km` });
+      if (!isFahrrad && p.pace  != null) stats.push({ label: 'Bestes Tempo', val: paceToStr(p.pace) });
+      if ( isFahrrad && p.speed != null) stats.push({ label: 'Ø Tempo',      val: `${p.speed} km/h` });
+      if (p.duration != null) stats.push({ label: 'Längste Dauer', val: `${p.duration} min` });
+
+      return `
+        <div class="cardio-pr-activity">
+          <div class="cardio-pr-activity-name">${icon} ${act}</div>
+          <div class="cardio-pr-stats">
+            ${stats.map(s => `
+              <div class="cardio-pr-stat">
+                <div class="cardio-pr-stat-label">${s.label}</div>
+                <div class="cardio-pr-stat-val">${s.val}</div>
+              </div>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="cardio-pr-card">
+        <div class="cardio-pr-title">Persönliche Rekorde 🏆</div>
+        ${rows}
+      </div>`;
+  },
+
+  _buildMonthlyStats() {
+    const month   = new Date().toISOString().slice(0, 7);
+    const entries = DB.getCardioEntries().filter(e => e.date.startsWith(month));
+    const totalKm  = entries.reduce((s, e) => s + (e.distance || 0), 0);
+    const totalMin = entries.reduce((s, e) => s + (e.duration || 0), 0);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    const timeStr = totalMin > 0 ? (h > 0 ? `${h}h ${m}min` : `${m}min`) : '0min';
+    const kmStr   = totalKm > 0 ? `${totalKm.toFixed(1)} km` : '0 km';
+    return `
+      <div class="history-stat-card">
+        <div class="history-stat-label">Distanz (Monat)</div>
+        <div class="history-stat-value">${kmStr}</div>
+      </div>
+      <div class="history-stat-card">
+        <div class="history-stat-label">Zeit (Monat)</div>
+        <div class="history-stat-value">${timeStr}</div>
+      </div>`;
   },
 
   buildCard(session) {
@@ -502,10 +633,11 @@ const History = {
     card.dataset.id = session.id;
 
     const totalSets = session.exercises.reduce((n,e) => n + e.sets.length, 0);
-    const hasPR    = session.exercises.some(e => e.sets.some(s => s.isPR));
+    const hasPR     = session.exercises.some(e => e.sets.some(s => s.isPR));
 
     card.innerHTML = `
       <div class="session-header">
+        <span class="session-type-icon">💪</span>
         <span class="session-date">${formatDate(session.date)}${hasPR ? ' 🏆' : ''}</span>
         <span class="session-meta">${session.exercises.length} Übung${session.exercises.length !== 1 ? 'en' : ''} · ${totalSets} Sätze</span>
         <span class="chevron">›</span>
@@ -542,6 +674,66 @@ const History = {
         DB.recalcAllPRs();
         this.render();
         Training.renderIdle();
+      });
+    });
+
+    return card;
+  },
+
+  _buildCardioCard(entry) {
+    const icon    = CARDIO_ICONS[entry.activity] || '🏃';
+    const card    = document.createElement('div');
+    card.className = 'cardio-card';
+
+    const parts   = [];
+    if (entry.distance != null) parts.push(`${entry.distance} km`);
+    if (entry.duration != null) parts.push(`${entry.duration} min`);
+    const summary = parts.join(' · ') || '—';
+
+    const detail = (label, val, unit='') => val != null
+      ? `<div class="cardio-detail-item"><label>${label}</label><span>${val}${unit ? ' '+unit : ''}</span></div>`
+      : '';
+
+    card.innerHTML = `
+      <div class="cardio-header">
+        <span class="session-type-icon">${icon}</span>
+        <div class="cardio-header-info">
+          <div class="cardio-header-date">${formatDate(entry.date)}</div>
+          <div class="cardio-header-summary">${entry.activity} · ${summary}</div>
+        </div>
+        <span class="chevron">›</span>
+      </div>
+      <div class="cardio-body">
+        <div class="cardio-body-inner">
+          <div class="cardio-detail-grid">
+            ${detail('Dauer',    entry.duration,  'min')}
+            ${detail('Distanz',  entry.distance,  'km')}
+            ${entry.activity === 'Fahrrad'
+              ? detail('Geschwindigkeit', entry.speed, 'km/h')
+              : (entry.pace != null ? `<div class="cardio-detail-item"><label>Tempo</label><span>${paceToStr(entry.pace)}</span></div>` : '')}
+            ${detail('Herzrate', entry.heartrate, 'bpm')}
+          </div>
+          <div class="cardio-actions">
+            <button class="btn-sm btn-sm-muted btn-cardio-edit">Bearbeiten</button>
+            <button class="btn-sm btn-sm-danger btn-cardio-delete">Löschen</button>
+          </div>
+        </div>
+      </div>`;
+
+    card.querySelector('.cardio-header').addEventListener('click', () => {
+      card.classList.toggle('expanded');
+    });
+    card.querySelector('.btn-cardio-edit').addEventListener('click', e => {
+      e.stopPropagation();
+      card.classList.remove('expanded');
+      Cardio.showForm(entry);
+    });
+    card.querySelector('.btn-cardio-delete').addEventListener('click', e => {
+      e.stopPropagation();
+      showConfirm(`${entry.activity} vom ${formatDate(entry.date)} löschen?`, () => {
+        DB.deleteCardioEntry(entry.id);
+        DB.recalcCardioPRs();
+        this.render();
       });
     });
 
@@ -629,114 +821,181 @@ const History = {
 
 // ===== PROGRESS MODULE =====
 const Progress = {
-  chart: null,
+  chart:       null,
   volumeChart: null,
+  cardioChart: null,
+  _metric: 'e1rm',  // 'e1rm' | 'reps' | 'volume'
+  _range:  '30d',   // '7d' | '14d' | '30d' | '3m' | '6m'
 
   render() {
     const exercises = DB.getExercisesWithData();
-    const sel = el('progress-select');
+    const sel  = el('progress-select');
     const prev = sel.value;
     sel.innerHTML = '<option value="">Übung wählen…</option>';
     exercises.forEach(name => {
       const opt = document.createElement('option');
-      opt.value = name;
-      opt.textContent = name;
+      opt.value = name; opt.textContent = name;
       sel.appendChild(opt);
     });
     if (prev && exercises.includes(prev)) sel.value = prev;
     this.update();
-    this.renderVolumeChart();
+    this.renderCardioChart();
   },
 
   update() {
     const name = el('progress-select').value;
+    const hasEx = !!name;
+
+    // Show/hide per-exercise controls
+    el('progress-summary').classList.toggle('hidden', !hasEx);
+    el('progress-metric-wrap').classList.toggle('hidden', !hasEx);
+    el('progress-range-wrap').classList.toggle('hidden', !hasEx);
+
     if (!name) {
       el('progress-chart-wrap').classList.add('hidden');
       el('progress-empty').classList.remove('hidden');
       el('progress-no-data').classList.add('hidden');
+      el('volume-chart-wrap').classList.add('hidden');
+      if (this.chart) { this.chart.destroy(); this.chart = null; }
       return;
     }
     el('progress-empty').classList.add('hidden');
 
-    const sessions = DB.getSessions()
+    // All sessions for summary cards (unfiltered)
+    const allSessions = DB.getSessions()
       .filter(s => s.exercises.some(e => e.name === name))
       .sort((a,b) => a.date.localeCompare(b.date));
+
+    this._renderSummaryCards(name, allSessions);
+
+    // Apply time range filter for chart
+    const cutoff  = this._rangeCutoff();
+    let sessions  = allSessions.filter(s => s.date >= cutoff);
 
     if (sessions.length === 0) {
       el('progress-chart-wrap').classList.add('hidden');
       el('progress-no-data').classList.remove('hidden');
+      el('volume-chart-wrap').classList.add('hidden');
       return;
     }
-
     el('progress-no-data').classList.add('hidden');
     el('progress-chart-wrap').classList.remove('hidden');
 
+    const bw     = DB.getBodyWeight();
     const labels = [];
     const data   = [];
 
-    const bw = DB.getBodyWeight();
     sessions.forEach(s => {
       const ex = s.exercises.find(e => e.name === name);
       if (!ex || ex.sets.length === 0) return;
-      const best = bestSet(ex.sets);
       labels.push(formatDateShort(s.date));
-      data.push(e1rm(best.reps, best.weight, bw));
+
+      if (this._metric === 'e1rm') {
+        const best = bestSet(ex.sets);
+        data.push(e1rm(best.reps, best.weight, bw));
+      } else if (this._metric === 'reps') {
+        data.push(Math.max(...ex.sets.map(s => s.reps)));
+      } else { // volume
+        const vol = ex.sets.reduce((sum, s) => sum + s.reps * ((bw || 0) + s.weight), 0);
+        data.push(Math.round(vol));
+      }
     });
 
-    const allBodyweight = sessions.every(s => {
-      const ex = s.exercises.find(e => e.name === name);
-      return ex && ex.sets.every(st => st.weight === 0);
+    const yLabel = this._metric === 'e1rm'   ? 'E1RM (kg)'
+                 : this._metric === 'reps'   ? 'Wdh.'
+                 : 'Volumen (kg)';
+
+    this._drawMainChart(labels, data, yLabel);
+    this.renderVolumeChart();
+  },
+
+  _rangeCutoff() {
+    const d = new Date();
+    if      (this._range === '7d')  d.setDate(d.getDate() - 7);
+    else if (this._range === '14d') d.setDate(d.getDate() - 14);
+    else if (this._range === '30d') d.setDate(d.getDate() - 30);
+    else if (this._range === '3m')  d.setMonth(d.getMonth() - 3);
+    else if (this._range === '6m')  d.setMonth(d.getMonth() - 6);
+    return localDateStr(d);
+  },
+
+  _renderSummaryCards(name, allSessions) {
+    const bw = DB.getBodyWeight();
+    if (allSessions.length === 0) { el('progress-summary').innerHTML = ''; return; }
+
+    // First session e1rm
+    const firstEx    = allSessions[0].exercises.find(e => e.name === name);
+    const firstBest  = bestSet(firstEx.sets);
+    const firstScore = e1rm(firstBest.reps, firstBest.weight, bw);
+
+    // Best ever e1rm
+    let curScore = 0;
+    allSessions.forEach(s => {
+      s.exercises.find(e => e.name === name)?.sets.forEach(set => {
+        const sc = e1rm(set.reps, set.weight, bw);
+        if (sc > curScore) curScore = sc;
+      });
     });
-    const yLabel = allBodyweight ? 'Max. Wdh.' : 'E1RM (kg)';
 
-    if (this.chart) { this.chart.destroy(); this.chart = null; }
+    const pct     = firstScore > 0 ? Math.round(((curScore - firstScore) / firstScore) * 100) : 0;
+    const pctSign = pct >= 0 ? '+' : '';
+    const fmt     = v => v > 0 ? `${v} kg` : `${v}`;
 
+    el('progress-summary').innerHTML = `
+      <div class="progress-stat-card">
+        <div class="progress-stat-label">Aktueller PR</div>
+        <div class="progress-stat-value">${fmt(curScore)}</div>
+      </div>
+      <div class="progress-stat-card">
+        <div class="progress-stat-label">Erster PR</div>
+        <div class="progress-stat-value">${fmt(firstScore)}</div>
+      </div>
+      <div class="progress-stat-card">
+        <div class="progress-stat-label">Steigerung</div>
+        <div class="progress-stat-value progress-stat-green">${pctSign}${pct}%</div>
+      </div>`;
+  },
+
+  _colors() {
     const isLight = document.documentElement.dataset.theme === 'light';
-    const accent    = isLight ? '#00C853' : '#00E676';
-    const surface   = isLight ? '#F5F5F5' : '#111111';
-    const border    = isLight ? '#E0E0E0' : '#222222';
-    const muted     = isLight ? '#666666' : '#888888';
-    const textColor = isLight ? '#000000' : '#FFFFFF';
+    return {
+      accent:    isLight ? '#00C853' : '#00E676',
+      surface:   isLight ? '#F5F5F5' : '#111111',
+      border:    isLight ? '#E0E0E0' : '#222222',
+      muted:     isLight ? '#666666' : '#888888',
+      textColor: isLight ? '#000000' : '#FFFFFF',
+    };
+  },
 
-    const ctx = el('progress-chart').getContext('2d');
-    this.chart = new Chart(ctx, {
+  _drawMainChart(labels, data, yLabel) {
+    if (this.chart) { this.chart.destroy(); this.chart = null; }
+    const { accent, surface, border, muted, textColor } = this._colors();
+    this.chart = new Chart(el('progress-chart').getContext('2d'), {
       type: 'line',
       data: {
         labels,
         datasets: [{
           data,
-          borderColor: accent,
-          backgroundColor: `${accent}14`,
-          borderWidth: 2.5,
-          pointBackgroundColor: accent,
-          pointRadius: 5,
-          pointHoverRadius: 7,
-          fill: true,
-          tension: 0.3,
+          borderColor: accent, backgroundColor: `${accent}14`,
+          borderWidth: 2.5, pointBackgroundColor: accent,
+          pointRadius: 5, pointHoverRadius: 7,
+          fill: true, tension: 0.3,
         }]
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: true,
+        responsive: true, maintainAspectRatio: true,
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: surface,
-            borderColor: border,
-            borderWidth: 1,
-            titleColor: muted,
-            bodyColor: textColor,
-            callbacks: { label: ctx => `${ctx.parsed.y} ${yLabel}` }
+            backgroundColor: surface, borderColor: border, borderWidth: 1,
+            titleColor: muted, bodyColor: textColor,
+            callbacks: { label: c => `${c.parsed.y} ${yLabel}` }
           }
         },
         scales: {
-          x: {
-            grid: { color: border },
-            ticks: { color: muted, font: { size: 11 } },
-          },
+          x: { grid: { color: border }, ticks: { color: muted, font: { size: 11 } } },
           y: {
-            grid: { color: border },
-            ticks: { color: muted, font: { size: 11 } },
+            grid: { color: border }, ticks: { color: muted, font: { size: 11 } },
             title: { display: true, text: yLabel, color: muted, font: { size: 11 } },
           }
         }
@@ -745,34 +1004,39 @@ const Progress = {
   },
 
   renderVolumeChart() {
-    const sessions = DB.getSessions();
+    const name = el('progress-select').value;
     const wrap = el('volume-chart-wrap');
+    if (!name) { wrap.classList.add('hidden'); return; }
 
-    // Build 8 weekly buckets ending with the current week (Mon–Sun)
+    el('volume-chart-title').textContent = `Wochenvolumen – ${name}`;
+
+    // Map range → number of weekly buckets to display
+    const weekCount = { '7d': 2, '14d': 3, '30d': 5, '3m': 13, '6m': 26 }[this._range] || 8;
+
+    const bw  = DB.getBodyWeight();
     const now = new Date();
-    const dowOffset = now.getDay() === 0 ? 6 : now.getDay() - 1; // days since Monday
-    const thisMonday = new Date(now);
-    thisMonday.setDate(now.getDate() - dowOffset);
-    thisMonday.setHours(0, 0, 0, 0);
+    const dow = now.getDay() === 0 ? 6 : now.getDay() - 1;
+    // This Monday in local calendar
+    const thisMon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
 
-    const weeks = Array.from({ length: 8 }, (_, i) => {
-      const start = new Date(thisMonday);
-      start.setDate(thisMonday.getDate() - (7 - i) * 7);
-      const end = new Date(start);
-      end.setDate(start.getDate() + 6);
-      end.setHours(23, 59, 59, 999);
-      const d = start;
-      return { start, end, volume: 0, label: `${d.getDate()}.${d.getMonth()+1}.` };
+    const weeks = Array.from({ length: weekCount }, (_, i) => {
+      const offset = (weekCount - 1 - i) * 7;
+      const mon    = new Date(thisMon.getFullYear(), thisMon.getMonth(), thisMon.getDate() - offset);
+      const sun    = new Date(mon.getFullYear(),     mon.getMonth(),     mon.getDate() + 6);
+      return {
+        monStr: localDateStr(mon),
+        sunStr: localDateStr(sun),
+        volume: 0,
+        label:  `${mon.getDate()}.${mon.getMonth()+1}.`,
+      };
     });
 
-    sessions.forEach(s => {
-      const [y, m, d] = s.date.split('-').map(Number);
-      const date = new Date(y, m-1, d);
+    DB.getSessions().forEach(s => {
+      const ex = s.exercises.find(e => e.name === name);
+      if (!ex) return;
       for (const week of weeks) {
-        if (date >= week.start && date <= week.end) {
-          s.exercises.forEach(ex =>
-            ex.sets.forEach(set => { if (set.weight > 0) week.volume += set.reps * set.weight; })
-          );
+        if (s.date >= week.monStr && s.date <= week.sunStr) {
+          ex.sets.forEach(set => { week.volume += set.reps * ((bw || 0) + set.weight); });
           break;
         }
       }
@@ -780,37 +1044,27 @@ const Progress = {
 
     if (weeks.every(w => w.volume === 0)) { wrap.classList.add('hidden'); return; }
     wrap.classList.remove('hidden');
-
     if (this.volumeChart) { this.volumeChart.destroy(); this.volumeChart = null; }
 
-    const isLight  = document.documentElement.dataset.theme === 'light';
-    const accent   = isLight ? '#00C853' : '#00E676';
-    const surface  = isLight ? '#F5F5F5' : '#111111';
-    const border   = isLight ? '#E0E0E0' : '#222222';
-    const muted    = isLight ? '#666666' : '#888888';
-    const textColor = isLight ? '#000000' : '#FFFFFF';
-
+    const { accent, surface, border, muted, textColor } = this._colors();
     this.volumeChart = new Chart(el('volume-chart').getContext('2d'), {
       type: 'bar',
       data: {
         labels: weeks.map(w => w.label),
         datasets: [{
-          data: weeks.map(w => w.volume),
-          backgroundColor: `${accent}28`,
-          borderColor: accent,
-          borderWidth: 1.5,
-          borderRadius: 5,
+          data: weeks.map(w => Math.round(w.volume)),
+          backgroundColor: `${accent}28`, borderColor: accent,
+          borderWidth: 1.5, borderRadius: 5,
         }]
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: true,
+        responsive: true, maintainAspectRatio: true,
         plugins: {
           legend: { display: false },
           tooltip: {
             backgroundColor: surface, borderColor: border, borderWidth: 1,
             titleColor: muted, bodyColor: textColor,
-            callbacks: { label: ctx => `${Math.round(ctx.parsed.y).toLocaleString('de-DE')} kg` }
+            callbacks: { label: c => `${Math.round(c.parsed.y).toLocaleString('de-DE')} kg` }
           }
         },
         scales: {
@@ -819,6 +1073,70 @@ const Progress = {
             grid: { color: border }, ticks: { color: muted, font: { size: 11 } },
             title: { display: true, text: 'kg', color: muted, font: { size: 11 } },
             beginAtZero: true,
+          }
+        }
+      }
+    });
+  },
+
+  renderCardioChart() {
+    const activity   = el('cardio-chart-select').value;
+    const isFahrrad  = activity === 'Fahrrad';
+    const entries    = DB.getCardioEntries()
+      .filter(e => e.activity === activity && (isFahrrad ? e.speed != null : e.pace != null))
+      .sort((a,b) => a.date.localeCompare(b.date));
+
+    const inner  = el('cardio-chart-inner');
+    const emptyP = el('cardio-chart-empty');
+    if (this.cardioChart) { this.cardioChart.destroy(); this.cardioChart = null; }
+
+    if (entries.length === 0) {
+      inner.classList.add('hidden');
+      emptyP.classList.remove('hidden');
+      return;
+    }
+    inner.classList.remove('hidden');
+    emptyP.classList.add('hidden');
+
+    const labels = entries.map(e => formatDateShort(e.date));
+    const data   = entries.map(e => isFahrrad ? e.speed : e.pace);
+    const yLabel = isFahrrad ? 'km/h' : 'min/km';
+
+    const { accent, surface, border, muted, textColor } = this._colors();
+    this.cardioChart = new Chart(el('cardio-chart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data,
+          borderColor: accent, backgroundColor: `${accent}14`,
+          borderWidth: 2.5, pointBackgroundColor: accent,
+          pointRadius: 5, pointHoverRadius: 7,
+          fill: true, tension: 0.3,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: surface, borderColor: border, borderWidth: 1,
+            titleColor: muted, bodyColor: textColor,
+            callbacks: {
+              label: c => isFahrrad ? `${c.parsed.y} km/h` : paceToStr(c.parsed.y)
+            }
+          }
+        },
+        scales: {
+          x: { grid: { color: border }, ticks: { color: muted, font: { size: 11 } } },
+          y: {
+            reverse: !isFahrrad, // lower pace = better → higher on chart
+            grid: { color: border },
+            ticks: {
+              color: muted, font: { size: 11 },
+              callback: v => isFahrrad ? v : paceToStr(v),
+            },
+            title: { display: true, text: yLabel, color: muted, font: { size: 11 } },
           }
         }
       }
@@ -933,17 +1251,6 @@ const PacePicker = {
 
 // ===== CARDIO MODULE =====
 const Cardio = {
-  render() {
-    const entries = DB.getCardioEntries().slice().sort((a,b) => b.date.localeCompare(a.date));
-    const wrap = el('cardio-list');
-    wrap.innerHTML = '';
-    if (entries.length === 0) {
-      wrap.innerHTML = '<p class="empty-state">Noch keine Cardio-Einheiten gespeichert.</p>';
-      return;
-    }
-    entries.forEach(e => wrap.appendChild(this.buildCard(e)));
-  },
-
   updateActivityFields() {
     const isFahrrad = el('cardio-activity').value === 'Fahrrad';
     el('pace-section').classList.toggle('hidden', isFahrrad);
@@ -952,7 +1259,7 @@ const Cardio = {
 
   showForm(entry = null) {
     State.editCardioId = entry ? entry.id : null;
-    el('cardio-form-heading').textContent = entry ? 'Einheit bearbeiten' : 'Neue Einheit';
+    el('cardio-modal-heading').textContent = entry ? 'Einheit bearbeiten' : 'Neue Einheit';
     el('cardio-activity').value  = entry ? entry.activity : 'Joggen';
     el('cardio-date').value      = entry ? entry.date     : today();
     DurationPicker.setFromMinutes(entry?.duration ?? 0);
@@ -961,12 +1268,13 @@ const Cardio = {
     el('cardio-speed').value     = entry?.speed     != null ? entry.speed     : '';
     el('cardio-heartrate').value = entry?.heartrate != null ? entry.heartrate : '';
     this.updateActivityFields();
-    el('cardio-form-wrap').classList.remove('hidden');
-    el('cardio-form-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el('modal-cardio').classList.add('open');
+    el('modal-cardio').setAttribute('aria-hidden', 'false');
   },
 
   hideForm() {
-    el('cardio-form-wrap').classList.add('hidden');
+    el('modal-cardio').classList.remove('open');
+    el('modal-cardio').setAttribute('aria-hidden', 'true');
     State.editCardioId = null;
   },
 
@@ -991,66 +1299,9 @@ const Cardio = {
     if (State.editCardioId) DB.updateCardioEntry(State.editCardioId, entry);
     else                    DB.addCardioEntry(entry);
 
+    DB.recalcCardioPRs();
     this.hideForm();
-    this.render();
-  },
-
-  buildCard(entry) {
-    const card = document.createElement('div');
-    card.className = 'cardio-card';
-
-    const parts = [];
-    if (entry.distance != null) parts.push(`${entry.distance} km`);
-    if (entry.duration != null) parts.push(`${entry.duration} min`);
-    const summary = parts.join(' · ') || '—';
-
-    const detail = (label, val, unit='') => val != null
-      ? `<div class="cardio-detail-item"><label>${label}</label><span>${val}${unit ? ' '+unit : ''}</span></div>`
-      : '';
-
-    card.innerHTML = `
-      <div class="cardio-header">
-        <span class="cardio-activity-badge">${entry.activity}</span>
-        <div class="cardio-header-info">
-          <div class="cardio-header-date">${formatDate(entry.date)}</div>
-          <div class="cardio-header-summary">${summary}</div>
-        </div>
-        <span class="chevron">›</span>
-      </div>
-      <div class="cardio-body">
-        <div class="cardio-body-inner">
-          <div class="cardio-detail-grid">
-            ${detail('Dauer',    entry.duration,  'min')}
-            ${detail('Distanz',  entry.distance,  'km')}
-            ${entry.activity === 'Fahrrad'
-              ? detail('Geschwindigkeit', entry.speed, 'km/h')
-              : (entry.pace != null ? `<div class="cardio-detail-item"><label>Tempo</label><span>${paceToStr(entry.pace)}</span></div>` : '')}
-            ${detail('Herzrate', entry.heartrate, 'bpm')}
-          </div>
-          <div class="cardio-actions">
-            <button class="btn-sm btn-sm-muted btn-cardio-edit">Bearbeiten</button>
-            <button class="btn-sm btn-sm-danger btn-cardio-delete">Löschen</button>
-          </div>
-        </div>
-      </div>`;
-
-    card.querySelector('.cardio-header').addEventListener('click', () => {
-      card.classList.toggle('expanded');
-    });
-    card.querySelector('.btn-cardio-edit').addEventListener('click', e => {
-      e.stopPropagation();
-      card.classList.remove('expanded');
-      this.showForm(entry);
-    });
-    card.querySelector('.btn-cardio-delete').addEventListener('click', e => {
-      e.stopPropagation();
-      showConfirm(`${entry.activity} vom ${formatDate(entry.date)} löschen?`, () => {
-        DB.deleteCardioEntry(entry.id);
-        this.render();
-      });
-    });
-
-    return card;
+    History.render();
   },
 };
 
@@ -1077,7 +1328,6 @@ const Onboarding = {
     // boot rest of app now
     Training.renderIdle();
     History.render();
-    Cardio.render();
     Progress.render();
     Profile.render();
   },
@@ -1305,9 +1555,9 @@ const Backup = {
         DB.saveCardioEntries(data.cardioEntries);
         DB.saveCustomExercises(data.customExercises);
         DB.recalcAllPRs();
+        DB.recalcCardioPRs();
         Training.renderIdle();
         History.render();
-        Cardio.render();
         Progress.render();
         this._showStatus('Import erfolgreich.', 'success');
       }, 'Importieren');
@@ -1326,7 +1576,7 @@ const Settings = {
     el('theme-sub-label').textContent = isLight ? 'Aktuell: Hell' : 'Aktuell: Dunkel';
     // Re-render charts with updated colors if visible
     if (Progress.chart)       Progress.update();
-    if (Progress.volumeChart) Progress.renderVolumeChart();
+    if (Progress.cardioChart) Progress.renderCardioChart();
   },
 
   toggle(isLight) {
@@ -1338,7 +1588,8 @@ const Settings = {
   init() {
     const saved = localStorage.getItem('theme') || 'dark';
     this.apply(saved);
-    el('weekly-goal-input').value = localStorage.getItem('weeklyGoal') || '3';
+    el('weekly-goal-input').value    = localStorage.getItem('weeklyGoal') || '3';
+    el('cardio-goal-toggle').checked = localStorage.getItem('countCardioInGoal') === '1';
   },
 };
 
@@ -1375,17 +1626,49 @@ function initEvents() {
   el('btn-confirm-cancel').addEventListener('click', closeConfirm);
   el('confirm-backdrop').addEventListener('click', closeConfirm);
 
-  // Progress
+  // Progress – exercise selector
   el('progress-select').addEventListener('change', () => Progress.update());
 
-  // Cardio
-  el('btn-show-cardio-form').addEventListener('click', () => Cardio.showForm());
+  // Progress – metric switcher
+  document.querySelectorAll('#progress-metric-wrap [data-metric]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      Progress._metric = btn.dataset.metric;
+      document.querySelectorAll('#progress-metric-wrap [data-metric]')
+        .forEach(b => b.classList.toggle('active', b === btn));
+      Progress.update();
+    });
+  });
+
+  // Progress – time range dropdown
+  el('progress-range-select').addEventListener('change', e => {
+    Progress._range = e.target.value;
+    Progress.update();
+  });
+
+  // Progress – cardio chart activity
+  el('cardio-chart-select').addEventListener('change', () => Progress.renderCardioChart());
+
+  // Cardio modal
+  el('btn-show-cardio-modal').addEventListener('click', () => Cardio.showForm());
+  el('btn-cardio-modal-close').addEventListener('click', () => Cardio.hideForm());
+  el('cardio-modal-backdrop').addEventListener('click', () => Cardio.hideForm());
   el('btn-cardio-cancel').addEventListener('click', () => Cardio.hideForm());
   el('btn-cardio-save').addEventListener('click', () => Cardio.save());
   el('cardio-activity').addEventListener('change', () => Cardio.updateActivityFields());
 
+  // History filter
+  document.querySelectorAll('.history-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => History.setFilter(btn.dataset.filter));
+  });
+
   // Settings – theme toggle
   el('theme-toggle').addEventListener('change', e => Settings.toggle(e.target.checked));
+
+  // Settings – cardio counts toward goal toggle
+  el('cardio-goal-toggle').addEventListener('change', e => {
+    localStorage.setItem('countCardioInGoal', e.target.checked ? '1' : '0');
+    Training.renderIdle();
+  });
 
   // Settings – weekly goal
   el('weekly-goal-input').addEventListener('change', e => {
@@ -1415,11 +1698,11 @@ document.addEventListener('DOMContentLoaded', () => {
   PacePicker.init();
   initEvents();
   initSW();
+  DB.recalcCardioPRs(); // ensure PRs are up-to-date for existing data
 
   if (Onboarding.isComplete()) {
     Training.render();
     History.render();
-    Cardio.render();
     Progress.render();
     Profile.render();
   } else {
